@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-RBF変形の外部マルチプロセス処理スクリプト
+External Multi-Process RBF Deformation Processing Script
 
-使用方法:
+Usage:
 python rbf_multithread_processor.py temp_rbf_data.npz
 
-このスクリプトはBlenderから出力された一時データファイルを読み込み、
-マルチプロセスでRBF補間処理を実行して結果を保存します。
+This script reads temporary data files exported from Blender,
+performs RBF interpolation using multi-threading, and saves the results.
 
-必要なライブラリ:
+Required libraries:
 - numpy
 - scipy
-- concurrent.futures (標準ライブラリ)
-- psutil (メモリモニタリング用)
+- concurrent.futures (standard library)
+- psutil (for memory monitoring)
 """
 
 import numpy as np
@@ -24,26 +24,26 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
-from scipy.sparse import csc_matrix  # 将来のコンパクト台RBF用（現在未使用）
-from scipy.sparse.linalg import gmres, LinearOperator  # spilu は対角前処理に変更のため削除
+from scipy.sparse import csc_matrix  # For future compact RBF units (currently unused)
+from scipy.sparse.linalg import gmres, LinearOperator  # spilu has been removed due to a change in diagonal preprocessing
 from typing import Tuple, List, Dict, Any
 
-# psutilの可用性をチェック
+# Check the availability of psutil
 try:
     import psutil
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
-    #print("警告: psutilがインストールされていません。メモリ監視機能は無効になります。")
-    #print("インストールするには: pip install psutil")
+    #print("Warning: psutil is not installed. Memory monitoring will be disabled.")
+    #print("To install: pip install psutil")
 
-# Numbaの可用性をチェック（オプショナル高速化）
+# Check Numba availability (optional performance optimization)
 try:
     from numba import jit, prange
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    # Numbaがない場合のダミー定義（デコレータを無効化）
+    # Dummy definition when Numba is not available (disables decorators)
     def jit(*args, **kwargs):
         def decorator(func):
             return func
@@ -51,20 +51,20 @@ except ImportError:
     prange = range
 
 def set_cpu_affinity():
-    """プロセスのCPU親和性を設定して全コアを活用"""
+    """Configure CPU affinity for the process to utilize all cores"""
     if not PSUTIL_AVAILABLE:
         print("CPU affinity not set: psutil is not available")
         return
     try:
-        # 全論理プロセッサを使用
+        # Use all logical processors
         all_cpus = list(range(psutil.cpu_count(logical=True)))
         psutil.Process().cpu_affinity(all_cpus)
-        print(f"CPU affinity set: using {len(all_cpus)} logical processors")
+        print(f"CPU affinity set: using {len(all_cpus)} logical processors.")
     except Exception as e:
         print(f"Failed to set CPU affinity: {e}")
 
 class MemoryMonitor:
-    """メモリ使用量を監視するクラス（psutil依存）"""
+    """Class for monitoring memory usage (depends on psutil)"""
     
     def __init__(self, max_memory_gb: float = None):
         if not PSUTIL_AVAILABLE:
@@ -78,98 +78,98 @@ class MemoryMonitor:
         self.initial_memory = self.get_memory_usage()
         
     def get_memory_usage(self) -> float:
-        """現在のメモリ使用量をGB単位で取得"""
+        """Get the current memory usage in GB"""
         if not self.enabled:
             return 0.0
         return self.process.memory_info().rss / 1024**3
     
     def get_memory_increase(self) -> float:
-        """初期状態からのメモリ増加量をGB単位で取得"""
+        """Get the amount of memory used since startup in gigabytes"""
         if not self.enabled:
             return 0.0
         return self.get_memory_usage() - self.initial_memory
     
     def is_memory_limit_exceeded(self) -> bool:
-        """メモリ制限を超えているかチェック"""
+        """Check if the memory limit has been exceeded"""
         if not self.enabled or self.max_memory_bytes is None:
             return False
         return self.process.memory_info().rss > self.max_memory_bytes
     
     def get_recommended_batch_size(self, current_batch_size: int, memory_increase: float) -> int:
-        """メモリ使用量に基づいて推奨バッチサイズを計算"""
+        """Calculate the recommended batch size based on memory usage"""
         if not self.enabled:
             return current_batch_size
         
-        if memory_increase > 2.0:  # 2GB以上増加した場合
+        if memory_increase > 2.0:  # If the increase is 2 GB or more
             return max(1000, current_batch_size // 4)
-        elif memory_increase > 1.0:  # 1GB以上増加した場合
+        elif memory_increase > 1.0:  # If the increase is 1 GB or more
             return max(5000, current_batch_size // 2)
         else:
             return current_batch_size
 
 
 def get_optimal_worker_count(total_items: int, memory_monitor: MemoryMonitor) -> int:
-    """最適なワーカー数を計算（プロセスプール用に調整）"""
-    # CPUコア数を取得
+    """Calculate the optimal number of workers (adjusted for the process pool)"""
+    # Get the number of CPU cores
     cpu_count = os.cpu_count()
     
-    # psutilが利用可能な場合のみメモリベースの調整を行う
+    # Perform memory-based tuning only if psutil is available
     if PSUTIL_AVAILABLE:
-        # メモリ使用量に基づいて調整
-        available_memory = psutil.virtual_memory().available / 1024**3  # GB単位
+        # Adjust based on memory usage
+        available_memory = psutil.virtual_memory().available / 1024**3  # in GB
     else:
-        # psutilが利用できない場合は保守的な値を使用
-        available_memory = 8.0  # 8GBと仮定
+        # If psutil is not available, use conservative values
+        available_memory = 8.0  # Assuming 8 GB
     
-    # プロセスプールでは各プロセスがメモリを独立して使用するため、より保守的に設定
-    if total_items > 1000000:  # 100万頂点以上
-        max_workers = min(cpu_count, 3)  # ThreadPoolよりも少なく設定
-    elif total_items > 500000:  # 50万頂点以上
+    # Since each process in a process pool uses memory independently, the settings should be more conservative
+    if total_items > 1000000:  # Over 1 million vertices
+        max_workers = min(cpu_count, 3)  # Set to a lower value than ThreadPool
+    elif total_items > 500000:  # Over 500,000 vertices
         max_workers = min(cpu_count, 4)
     else:
         max_workers = min(cpu_count, 6)
     
-    # 利用可能メモリに基づいて調整（プロセスプール用により厳しく）
-    if available_memory < 4.0:  # 4GB未満
+    # Adjust based on available memory (more strictly for the process pool)
+    if available_memory < 4.0:  # Less than 4GB
         max_workers = min(max_workers, 1)
-    elif available_memory < 8.0:  # 8GB未満
+    elif available_memory < 8.0:  # Less than 8 GB
         max_workers = min(max_workers, 2)
-    elif available_memory < 16.0:  # 16GB未満
+    elif available_memory < 16.0:  # Less than 16 GB
         max_workers = min(max_workers, 4)
     
     return max(1, max_workers)
 
 
 def multi_quadratic_biharmonic(r: np.ndarray, epsilon: float = 1.0) -> np.ndarray:
-    """Multi-Quadratic Biharmonic RBFカーネル関数"""
+    """Multi-Quadratic Biharmonic RBF Kernel Function"""
     return np.sqrt(r**2 + epsilon**2)
 
 
-# デフォルトのデータ型（float32でメモリ効率化、float64で高精度）
+# Default data type (float32 for memory efficiency, float64 for high precision)
 DEFAULT_DTYPE = np.float32
 
 
 # =============================================================================
-# Numba JIT高速化関数（P2-1）
+# Numba JIT Optimization Functions (P2-1)
 # =============================================================================
 
-# cache=False: Microsoft Store版Blenderのサンドボックス環境で
-# キャッシュディレクトリへのアクセスがハングする問題を回避
+# cache=False: Workaround for an issue where access to the cache directory hangs
+# in the Microsoft Store version of Blender's sandbox environment
 @jit(nopython=True, parallel=True, fastmath=True, cache=False, nogil=True)
 def _cdist_sqeuclidean_numba(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """
-    Numba JIT版 二乗ユークリッド距離計算
+    Numba JIT Version: Calculation of Euclidean Squared Distance
 
     Parameters:
-    - A: 形状 (m, d) の配列
-    - B: 形状 (n, d) の配列
+    - A: Array of shape (m, d)
+    - B: An array of shape (n, d)
 
     Returns:
-    - 形状 (m, n) の二乗距離行列
+    - A squared distance matrix of shape (m, n)
 
     Note:
-        nogil=True により、GILを解放して実行します。
-        ThreadPoolExecutorとの併用時も並列性能が得られます。
+        Setting 'nogil=True' disables the Global Interpreter Lock (GIL) during execution.
+        Parallel performance is achieved even when used with a 'ThreadPoolExecutor'.
     """
     m, d = A.shape
     n = B.shape[0]
@@ -186,23 +186,23 @@ def _cdist_sqeuclidean_numba(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     return result
 
 
-# cache=False: Microsoft Store版Blenderのサンドボックス環境で
-# キャッシュディレクトリへのアクセスがハングする問題を回避
+# cache=False: In the Microsoft Store version of Blender's sandbox environment,
+# this avoids an issue where access to the cache directory causes the program to hang
 @jit(nopython=True, parallel=True, fastmath=True, cache=False, nogil=True)
 def _cdist_euclidean_numba(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """
-    Numba JIT版 ユークリッド距離計算
+    Numba JIT Version: Euclidean Distance Calculation
 
     Parameters:
-    - A: 形状 (m, d) の配列
-    - B: 形状 (n, d) の配列
+    - A: Array of shape (m, d)
+    - B: An array of shapes (n, d)
 
     Returns:
-    - 形状 (m, n) の距離行列
+    - A distance matrix of shape (m, n)
 
     Note:
-        nogil=True により、GILを解放して実行します。
-        ThreadPoolExecutorとの併用時も並列性能が得られます。
+        Setting 'nogil=True' releases the GIL during execution.
+        Parallel performance is achieved even when used with a 'ThreadPoolExecutor'.
     """
     m, d = A.shape
     n = B.shape[0]
@@ -221,24 +221,24 @@ def _cdist_euclidean_numba(A: np.ndarray, B: np.ndarray) -> np.ndarray:
 
 def cdist_fast(A: np.ndarray, B: np.ndarray, metric: str = 'sqeuclidean') -> np.ndarray:
     """
-    高速距離計算（Numba利用可能時はJIT版、それ以外はscipy.cdist）
+    Fast Distance Calculation (JIT version when Numba is available; otherwise, scipy.cdist)
 
     Parameters:
-    - A: 形状 (m, d) の配列
-    - B: 形状 (n, d) の配列
-    - metric: 'sqeuclidean'（二乗ユークリッド）または 'euclidean'
+    - A: Array of shape (m, d)
+    - B: Array of shape (n, d)
+    - metric: 'sqeuclidean' (squared Euclidean) or 'euclidean'
 
     Returns:
-    - 距離行列（float32）
+    - Distance matrix (float32)
 
     Note:
-        この関数は常にfloat32を返します（Numba経路・scipy経路共通）。
-        - Numba JIT版: 内部でfloat32固定（パフォーマンス最適化）
-        - scipy.cdist版: 結果をDEFAULT_DTYPE（通常float32）にキャスト
+        This function always returns float32 (common to both Numba and scipy implementations).
+        - Numba JIT version: Internally fixed to float32 (for performance optimization)
+        - scipy.cdist version: Casts the result to DEFAULT_DTYPE (usually float32)
 
-        将来DEFAULT_DTYPE=float64を許容する場合は、Numba経路の精度制限に注意。
+        If DEFAULT_DTYPE=float64 is allowed in the future, be aware of the precision limitations of the Numba path.
     """
-    # float32に変換（Numba版は float32 固定、精度よりパフォーマンス重視）
+    # Convert to float32 (The Numba version uses float32 by default, prioritizing performance over precision)
     A_f32 = A.astype(np.float32) if A.dtype != np.float32 else A
     B_f32 = B.astype(np.float32) if B.dtype != np.float32 else B
 
@@ -248,73 +248,73 @@ def cdist_fast(A: np.ndarray, B: np.ndarray, metric: str = 'sqeuclidean') -> np.
         elif metric == 'euclidean':
             return _cdist_euclidean_numba(A_f32, B_f32)
         else:
-            # サポート外のmetricはscipy.cdistにフォールバック
+            # For unsupported metrics, fall back to scipy.cdist
             return cdist(A, B, metric).astype(DEFAULT_DTYPE)
     else:
-        # Numbaがない場合はscipy.cdistを使用
+        # If Numba is not available, use scipy.cdist
         return cdist(A, B, metric).astype(DEFAULT_DTYPE)
 
 
 # =============================================================================
-# GMRES反復ソルバー（P2-2）
+# GMRES Iterative Solver (P2-2)
 # =============================================================================
 
-# GMRES使用フラグ（実験的機能、デフォルトは無効）
+# GMRES usage flag (experimental feature; disabled by default)
 USE_GMRES_SOLVER = False
 
-# ハイブリッド並列化フラグ（P2-3）
-# True: RBF評価でThreadPoolExecutorを使用（NumPyがGILを解放する操作で効果的）
-# False: 従来のProcessPoolExecutorを使用（デフォルト、安定性重視）
+# Hybrid Parallelization Flag (P2-3)
+# True: Use ThreadPoolExecutor for RBF evaluation (effective for operations where NumPy releases the GIL)
+# False: Use the traditional ProcessPoolExecutor (default, prioritizes stability)
 USE_HYBRID_PARALLELIZATION = False
 
 
-# GMRES使用時の行列サイズ上限（密行列の疎行列変換はメモリ・時間的に非現実的）
-# コンパクト台RBF導入後に緩和可能
+# Maximum matrix size when using GMRES (converting dense matrices to sparse matrices is impractical in terms of memory and time)
+# This limit can be relaxed after introducing compact RBF
 GMRES_MAX_MATRIX_SIZE = 5000
 
 
 def solve_with_gmres(A: np.ndarray, b: np.ndarray, tol: float = 1e-6,
                      maxiter: int = 500, restart: int = 100) -> Tuple[np.ndarray, bool]:
     """
-    GMRES反復ソルバー（対角前処理）
+    GMRES Iterative Solver (Diagonal Preconditioning)
 
     Parameters:
-    - A: 係数行列 (n, n)
-    - b: 右辺ベクトル/行列 (n,) or (n, m)
-    - tol: 収束許容誤差
-    - maxiter: 最大反復回数
-    - restart: リスタート間隔
+    - A: Coefficient matrix (n, n)
+    - b: Right-hand side vector/matrix (n,) or (n, m)
+    - tol: Convergence tolerance
+    - maxiter: Maximum number of iterations
+    - restart: Restart interval
 
     Returns:
-    - x: 解ベクトル/行列
-    - success: 収束したかどうか
+    - x: Solution vector/matrix
+    - success: Whether convergence was achieved,
 
     Note:
-        現在のRBF行列は密行列のため、ILU前処理ではなく対角前処理を使用します。
-        - 密行列をcsc_matrixに変換してspiluすると、非ゼロ要素がほぼ全てになり
-          メモリ・時間の観点で破綻します（n≈15,783でA要素数≈2.5e8）
-        - コンパクト台RBF導入後（Aが疎になる場合）はILU前処理が効果的です
+        Since the current RBF matrix is dense, we use diagonalization rather than ILU preprocessing.
+        - If we convert the dense matrix to a csc_matrix and apply spilu, nearly all elements become non-zero,
+          which causes the algorithm to fail from a memory and time perspective (with n ≈ 15,783, the number of elements in A is ≈ 2.5e8)
+        - After introducing a compact basis RBF (when A becomes sparse), ILU preprocessing is effective.
 
-        行列サイズがGMRES_MAX_MATRIX_SIZEを超える場合は即座にフォールバックします。
+        If the matrix size exceeds GMRES_MAX_MATRIX_SIZE, the algorithm immediately falls back.
     """
     n = A.shape[0]
     b_is_matrix = b.ndim == 2
 
-    # 密行列サイズガード: 大きすぎる場合は即フォールバック
+    # Dense Matrix Size Check: Fall back immediately if the matrix is too large
     if n > GMRES_MAX_MATRIX_SIZE:
-        print(f"GMRES: 行列サイズ {n} が上限 {GMRES_MAX_MATRIX_SIZE} を超過 - 直接法にフォールバック")
-        print(f"  (密行列の疎行列変換は n>{GMRES_MAX_MATRIX_SIZE} でメモリ・時間的に非現実的)")
+        print(f"GMRES: The matrix size {n} exceeds the limit {GMRES_MAX_MATRIX_SIZE} - Falling back to the direct method.")
+        print(f"  (Converting a dense matrix to a sparse matrix is impractical in terms of memory and time when n > {GMRES_MAX_MATRIX_SIZE}).")
         return None, False
 
     try:
-        # 対角前処理（密行列に対して安全かつ効果的）
-        # ILU前処理は密行列では非現実的なため使用しない
+        # Diagonalization (safe and effective for dense matrices)
+        # Do not use ILU diagonalization because it is impractical for dense matrices
         diag = np.diag(A)
-        # ゼロ除算を避けるため、小さい対角要素を1に置換
+        # Replace small diagonal elements with 1 to avoid division by zero
         diag = np.where(np.abs(diag) < 1e-10, 1.0, diag)
 
-        # 対角前処理: M^{-1} = diag(A)^{-1}
-        # 密行列に対して安全で、ILUより軽量
+        # Diagonal preprocessing: M^{-1} = diag(A)^{-1}
+        # Safe for dense matrices and more efficient than ILU
         diag_inv = 1.0 / diag
 
         def preconditioner(x):
@@ -323,7 +323,7 @@ def solve_with_gmres(A: np.ndarray, b: np.ndarray, tol: float = 1e-6,
         M = LinearOperator((n, n), matvec=preconditioner, dtype=A.dtype)
 
         if b_is_matrix:
-            # 複数の右辺ベクトルを持つ場合（x, y, z成分）
+            # When there are multiple right-hand side vectors (x, y, z components)
             m = b.shape[1]
             x = np.zeros_like(b)
             all_converged = True
@@ -340,63 +340,63 @@ def solve_with_gmres(A: np.ndarray, b: np.ndarray, tol: float = 1e-6,
             return x, (info == 0)
 
     except Exception as e:
-        print(f"GMRES処理中にエラー: {e}")
+        print(f"Error during GMRES processing: {e}")
         return None, False
 
 
 def calculate_optimal_batch_size(num_control_pts: int, max_workers: int,
                                   available_memory_gb: float = None) -> int:
     """
-    メモリ制約を考慮した最適バッチサイズ計算
+    Calculating the Optimal Batch Size Considering Memory Constraints
 
     Parameters:
-    - num_control_pts: 制御点の数
-    - max_workers: ワーカー数
-    - available_memory_gb: 利用可能メモリ（GB）、Noneの場合は自動検出
+    - num_control_pts: Number of control points
+    - max_workers: Number of workers
+    - available_memory_gb: Available memory (GB); if None, it is detected automatically
 
     Returns:
-    - 最適なバッチサイズ
+    - Optimal batch size
 
     Note:
-        OOMエラーが発生する場合は以下の調整を検討:
-        - MEMORY_USAGE_RATIO (0.5): 利用可能メモリの使用率を下げる（例: 0.3）
-        - MAX_BATCH_SIZE (20000): 上限を下げる（例: 10000）
-        - MIN_BATCH_SIZE (1000): 下限を調整（処理速度とのトレードオフ）
+        If an OOM error occurs, consider the following adjustments:
+        - MEMORY_USAGE_RATIO (0.5): Lower the percentage of available memory used (e.g., 0.3)
+        - MAX_BATCH_SIZE (20000): Lower the upper limit (e.g., 10000)
+        - MIN_BATCH_SIZE (1000): Adjust the lower limit (trade-off with processing speed)
     """
-    # 調整可能な定数（OOMが発生する場合はこれらを調整）
-    MEMORY_USAGE_RATIO = 0.5  # 利用可能メモリの使用率（安全マージン）
-    MIN_BATCH_SIZE = 1000     # 下限（小さすぎると通信オーバーヘッド増加）
-    MAX_BATCH_SIZE = 20000    # 上限（大きすぎるとメモリ断片化リスク）
+    # Adjustable constants (adjust these if an OOM occurs)
+    MEMORY_USAGE_RATIO = 0.5  # Utilization rate of available memory (safety margin)
+    MIN_BATCH_SIZE = 1000     # Lower limit (Too small increases communication overhead)
+    MAX_BATCH_SIZE = 20000    # Upper limit (Too large risks memory fragmentation)
 
-    # 利用可能メモリを取得
+    # Get available memory
     if available_memory_gb is None:
         if PSUTIL_AVAILABLE:
             available_memory_gb = psutil.virtual_memory().available / 1024**3
         else:
-            available_memory_gb = 8.0  # デフォルト8GB
+            available_memory_gb = 8.0  # Default: 8 GB
 
-    # バッチあたりメモリ使用量の推定
-    # - 距離行列: batch_size × num_control_pts × 4 bytes (float32)
-    # - RBF値: batch_size × num_control_pts × 4 bytes (float32)
-    # - 多項式項: batch_size × 4 × 4 bytes (float32)
-    # - 結果: batch_size × 3 × 4 bytes (float32)
-    bytes_per_vertex = num_control_pts * 4 * 2 + 4 * 4 + 3 * 4  # float32基準
+    # Estimated memory usage per batch
+    # - Distance matrix: batch_size × num_control_pts × 4 bytes (float32)
+    # - RBF values: batch_size × num_control_pts × 4 bytes (float32)
+    # - Polynomial terms: batch_size × 4 × 4 bytes (float32)
+    # - Results: batch_size × 3 × 4 bytes (float32)
+    bytes_per_vertex = num_control_pts * 4 * 2 + 4 * 4 + 3 * 4  # Based on float32
 
-    # 利用可能メモリの指定率を使用
+    # Use the specified memory usage ratio
     target_bytes = available_memory_gb * MEMORY_USAGE_RATIO * 1024**3
 
-    # ワーカー数で分割
+    # Divide by the number of workers
     bytes_per_worker = target_bytes / max(1, max_workers)
 
-    # 最適バッチサイズを計算
+    # Calculate the optimal batch size
     optimal_batch = int(bytes_per_worker / bytes_per_vertex)
 
-    # 上限・下限の設定
+    # Set upper and lower bounds
     result = max(MIN_BATCH_SIZE, min(optimal_batch, MAX_BATCH_SIZE))
 
-    print(f"バッチサイズを動的計算: "
-          f"制御点数={num_control_pts}, ワーカー数={max_workers}, "
-          f"利用可能メモリ={available_memory_gb:.1f}GB → batch_size={result}")
+    print(f"Calculating batch size dynamically: "
+          f"Number of control points={num_control_pts}, number of workers={max_workers}, "
+          f"Available memory={available_memory_gb:.1f} GB → batch_size={result}")
 
     return result
 
@@ -414,21 +414,21 @@ def smooth_step(x: np.ndarray, edge0: float, edge1: float) -> np.ndarray:
 
 def compute_distances_batch(batch_data: Dict[str, Any]) -> Tuple[int, int, np.ndarray]:
     """
-    距離計算のバッチ処理（マルチプロセス用）
-    メモリ効率を改善
+    Batch Processing for Distance Calculation (for Multi-Processing)
+    Improve memory efficiency
     """
     start_idx = batch_data['start_idx']
     end_idx = batch_data['end_idx']
     batch_targets = batch_data['batch_targets']
     
-    # KDTreeの情報を取得して新しいKDTreeを構築（メモリ効率化）
+    # Retrieve KDTree information and construct a new KDTree (for memory efficiency)
     source_vertices = batch_data['source_vertices']
     kdtree = KDTree(source_vertices)
     
-    # KDTreeを使用して最近接点を検索
+    # Search for nearest neighbors using the KDTree
     distances, _ = kdtree.query(batch_targets)
     
-    # 使用後すぐにメモリを解放
+    # Free memory immediately after use
     del kdtree
     
     return start_idx, end_idx, distances
@@ -437,61 +437,61 @@ def compute_distances_batch(batch_data: Dict[str, Any]) -> Tuple[int, int, np.nd
 def compute_distances_to_source_mesh(target_vertices: np.ndarray, source_vertices: np.ndarray, 
                                    batch_size: int = 5000, max_workers: int = None) -> np.ndarray:
     """
-    ターゲットメッシュの各頂点からソースメッシュの最近接頂点までの距離を計算
-    KDTreeと並列処理を使用して高速化、メモリ効率を改善
+    Calculates the distance from each vertex of the target mesh to the nearest vertex of the source mesh
+    Uses KDTree and parallel processing to improve speed and memory efficiency
     
     Parameters:
-    - target_vertices: ターゲット頂点配列
-    - source_vertices: ソース頂点配列  
-    - batch_size: バッチサイズ（デフォルト: 5000、メモリ効率化のため削減）
-    - max_workers: 最大ワーカー数（Noneの場合は自動設定）
+    - target_vertices: Array of target vertices
+    - source_vertices: Source vertex array  
+    - batch_size: Batch size (default: 5000; reduced for memory efficiency)
+    - max_workers: Maximum number of workers (automatically set if None)
     
     Returns:
-    - 距離配列
+    - Distance array
     """
     num_target = len(target_vertices)
     distances = np.zeros(num_target, dtype=DEFAULT_DTYPE)
     
-    # メモリモニタリングを開始
+    # Start memory monitoring
     memory_monitor = MemoryMonitor()
     
-    # 最適なワーカー数を計算
+    # Calculate the optimal number of workers
     if max_workers is None:
         max_workers = get_optimal_worker_count(num_target, memory_monitor)
     
-    print(f"各頂点の最近接点までの距離を並列計算中... (頂点数: {num_target:,}, ワーカー数: {max_workers})")
+    print(f"Parallel calculation of the distance from each vertex to its nearest neighbor in progress... (Number of vertices: {num_target:,}, Number of workers: {max_workers})")
     
-    # 小さなデータセットの場合は並列化しない
+    # Do not parallelize for small datasets
     if num_target <= batch_size:
-        print("小さなデータセットのため単一処理で実行...")
+        print("Executing as a single process due to small dataset...")
         kdtree = KDTree(source_vertices)
         distances, _ = kdtree.query(target_vertices)
-        print("距離計算完了")
+        print("Distance calculation complete")
         return distances
     
-    # バッチサイズを動的に調整
+    # Dynamically adjust batch size
     memory_increase = memory_monitor.get_memory_increase()
-    if memory_increase > 0.5:  # 500MB以上増加した場合
+    if memory_increase > 0.5:  # If memory has increased by 500MB or more
         batch_size = memory_monitor.get_recommended_batch_size(batch_size, memory_increase)
-        print(f"メモリ使用量に基づいてバッチサイズを調整: {batch_size}")
+        print(f"Adjusting batch size based on memory usage: {batch_size}")
     
-    # バッチデータを準備
+    # Prepare batch data
     batch_tasks = []
     for i in range(0, num_target, batch_size):
         end_idx = min(i + batch_size, num_target)
-        batch_targets = target_vertices[i:end_idx].copy()  # コピーを作成してメモリ効率化
+        batch_targets = target_vertices[i:end_idx].copy()  # Create a copy to improve memory efficiency
         
         batch_data = {
             'start_idx': i,
             'end_idx': end_idx,
             'batch_targets': batch_targets,
-            'source_vertices': source_vertices  # KDTreeではなくソース頂点を渡す
+            'source_vertices': source_vertices  # Pass the source vertex instead of the KDTree
         }
         batch_tasks.append(batch_data)
     
-    print(f"距離計算を {len(batch_tasks)} バッチでマルチプロセス処理します")
+    print(f"The distance calculation will be processed in {len(batch_tasks)} batches using multi-process processing.")
     
-    # 並列処理で距離を計算
+    # Calculating distance using parallel processing
     processed_count = 0
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         future_to_batch = {executor.submit(compute_distances_batch, batch_data): batch_data for batch_data in batch_tasks}
@@ -504,38 +504,38 @@ def compute_distances_to_source_mesh(target_vertices: np.ndarray, source_vertice
                 processed_count += (end_idx - start_idx)
                 progress_percent = (processed_count / num_target) * 100
                 
-                # プロセスプールでの進捗表示（メモリ監視は各プロセスで独立）
+                # Progress display in the process pool (memory monitoring is independent for each process)
                 if processed_count % (batch_size * 5) == 0 or processed_count == num_target:
                     if memory_monitor.enabled:
                         current_memory = memory_monitor.get_memory_usage()
-                        print(f"距離計算進捗: {processed_count:,}/{num_target:,} 頂点処理完了 ({progress_percent:.1f}%) [メインプロセスメモリ: {current_memory:.1f}GB]")
+                        print(f"Distance Calculation Progress: {processed_count:,}/{num_target:,} Vertices processed ({progress_percent:.1f}%) [Main Process Memory: {current_memory:.1f} GB]")
                     else:
-                        print(f"距離計算進捗: {processed_count:,}/{num_target:,} 頂点処理完了 ({progress_percent:.1f}%)")
+                        print(f"Distance Calculation Progress: {processed_count:,}/{num_target:,} Vertices processed ({progress_percent:.1f}%)")
                 
             except Exception as exc:
                 batch_data = future_to_batch[future]
-                print(f"距離計算バッチ {batch_data['start_idx']}-{batch_data['end_idx']} でエラーが発生: {exc}")
-                print("スタックトレース:")
+                print(f"An error occurred while calculating the range {batch_data['start_idx']}-{batch_data['end_idx']}: {exc}")
+                print("Stack trace:")
                 traceback.print_exc()
                 raise exc
     
-    print("距離計算完了")
+    print("The distance calculation is complete")
     return distances
 
 
 def falloff_displacements(target_vertices: np.ndarray, target_displacements: np.ndarray, 
                          source_vertices: np.ndarray, max_workers: int = None) -> List[np.ndarray]:
     """
-    距離に基づいて変位にフォールオフを適用
+    Apply a falloff to displacement based on distance
     """
     num_vertices = len(target_vertices)
     
-    # 各頂点のソースメッシュの最近接頂点までの距離を計算
-    print("ソースメッシュまでの距離を計算中...")
+    # Calculate the distance from each vertex to the nearest vertex of the source mesh
+    print("Calculating distance to the source mesh...")
     distances = compute_distances_to_source_mesh(target_vertices, source_vertices, 
                                                batch_size=5000, max_workers=max_workers)
     
-    # 距離に基づく重み付け
+    # Distance-based weighting
     distances = np.maximum(distances - 0.015, 0.0)
     weights = np.minimum(1.0, smooth_step(distances * 4.0, 0.0, 1.0))
 
@@ -543,7 +543,7 @@ def falloff_displacements(target_vertices: np.ndarray, target_displacements: np.
     
     for i in range(num_vertices):
         if weights[i] > 0:
-            # 距離に応じた重み付けを適用
+            # Apply distance-based weighting
             blend_factor = weights[i]
             next_displacement = (1.0 - blend_factor) * target_displacements[i]
         else:
@@ -556,8 +556,8 @@ def falloff_displacements(target_vertices: np.ndarray, target_displacements: np.
 
 def process_vertex_batch(batch_data: Dict[str, Any]) -> Tuple[int, int, np.ndarray]:
     """
-    頂点のバッチを処理する関数（マルチプロセス用）
-    メモリ効率を改善
+    Function to process vertex batches (for multi-process)
+    Improves memory efficiency
     
     Returns:
         Tuple[start_idx, end_idx, displacements]
@@ -574,35 +574,35 @@ def process_vertex_batch(batch_data: Dict[str, Any]) -> Tuple[int, int, np.ndarr
     current_batch_size = end_idx - start_idx
     
     try:
-        # ターゲット頂点と制御点の間の距離を計算
-        # Numba利用可能時はJIT版を使用（3-5倍高速化）
+        # Calculate the distance between the target vertex and the control point
+        # Use the JIT version if Numba is available (3-5 times faster)
         batch_dists = cdist_fast(batch_world_vertices, source_control_points, 'sqeuclidean')
         batch_phi = np.sqrt(batch_dists + DEFAULT_DTYPE(epsilon**2))
 
-        # 多項式項の計算（DEFAULT_DTYPEに統一）
+        # Calculating Polynomial Terms (Unified to DEFAULT_DTYPE)
         batch_P = np.ones((current_batch_size, dim + 1), dtype=DEFAULT_DTYPE)
         batch_P[:, 1:] = batch_world_vertices
 
-        # 各ターゲット頂点の変位を計算
+        # Calculate the displacement of each target vertex
         batch_displacements = np.dot(batch_phi, rbf_weights) + np.dot(batch_P, poly_weights)
         
-        # 使用後すぐにメモリを解放
+        # Free up memory immediately after use
         del batch_dists, batch_phi, batch_P
         
         return start_idx, end_idx, batch_displacements
 
     except Exception as e:
-        print(f"バッチ処理中にエラーが発生: {e}")
+        print(f"An error occurred during batch processing: {e}")
         raise
 
 
 def process_vertex_batch_thread(args: Tuple) -> Tuple[int, int, np.ndarray]:
     """
-    頂点のバッチを処理する関数（ThreadPoolExecutor用）
+    Function for Processing Batches of Vertices (for ThreadPoolExecutor)
 
-    ThreadPoolExecutorはメモリを共有するため、大きな配列をコピーせずに
-    参照渡しで効率的に処理できます。NumPyのBLAS操作はGILを解放するため、
-    ThreadPoolExecutorでも並列性能が得られます。
+    Since ThreadPoolExecutor shares memory, it can efficiently process large arrays
+    by passing by reference without copying them. Because NumPy's BLAS operations release the GIL,
+    parallel performance can be achieved even with ThreadPoolExecutor.
 
     Parameters:
         args: (start_idx, end_idx, target_world_vertices, source_control_points,
@@ -618,25 +618,25 @@ def process_vertex_batch_thread(args: Tuple) -> Tuple[int, int, np.ndarray]:
     current_batch_size = end_idx - start_idx
 
     try:
-        # ターゲット頂点と制御点の間の距離を計算
-        # Numba利用可能時はJIT版を使用（3-5倍高速化）
+        # Calculate the distance between the target vertex and the control point
+        # Use the JIT version if Numba is available (3 - 5 times faster)
         batch_dists = cdist_fast(batch_world_vertices, source_control_points, 'sqeuclidean')
         batch_phi = np.sqrt(batch_dists + DEFAULT_DTYPE(epsilon**2))
 
-        # 多項式項の計算（DEFAULT_DTYPEに統一）
+        # Calculating polynomial terms (unified to DEFAULT_DTYPE)
         batch_P = np.ones((current_batch_size, dim + 1), dtype=DEFAULT_DTYPE)
         batch_P[:, 1:] = batch_world_vertices
 
-        # 各ターゲット頂点の変位を計算
+        # Calculating polynomial terms (unified to DEFAULT_DTYPE)
         batch_displacements = np.dot(batch_phi, rbf_weights) + np.dot(batch_P, poly_weights)
 
-        # メモリ解放
+        # Memory Release
         del batch_dists, batch_phi, batch_P
 
         return start_idx, end_idx, batch_displacements
 
     except Exception as e:
-        print(f"バッチ処理中にエラーが発生: {e}")
+        print(f"An error occurred during batch processing: {e}")
         raise
 
 
@@ -644,158 +644,158 @@ def rbf_interpolation_multithread(source_control_points: np.ndarray,
                                  source_control_points_deformed: np.ndarray, 
                                  target_world_vertices: np.ndarray,
                                  epsilon: float = 1.0, 
-                                 batch_size: int = 10000,  # デフォルトバッチサイズを削減
+                                 batch_size: int = 10000,  # Reduce the default batch size
                                  max_workers: int = None) -> Tuple[np.ndarray, np.ndarray]:
     """
-    マルチプロセスRBF補間を使用してターゲットメッシュの新しい位置を計算
-    メモリ効率を改善
+    Calculates new positions for the target mesh using multi-process RBF interpolation
+    Improves memory efficiency
     
     Parameters:
-    - source_control_points: ソースメッシュの選択された制御点（基準位置）- ワールド座標
-    - source_control_points_deformed: シェイプキーで変形後のソースメッシュの制御点 - ワールド座標
-    - target_world_vertices: ターゲットメッシュの頂点（ワールド座標）
-    - epsilon: RBFパラメータ
-    - batch_size: 一度に処理するターゲット頂点の数（デフォルト値を削減）
-    - max_workers: 最大ワーカー数（Noneの場合はCPUコア数に基づく）
+    - source_control_points: Selected control points of the source mesh (reference positions) - world coordinates
+    - source_control_points_deformed: Control points of the source mesh after deformation by shape keys - world coordinates
+    - target_world_vertices: Vertices of the target mesh (world coordinates)
+    - epsilon: RBF parameter
+    - batch_size: Number of target vertices processed at a time (reduces the default value)
+    - max_workers: Maximum number of workers (if None, based on the number of CPU cores)
     
     Returns:
-    - 変位ベクトル
-    - フォールオフ適用後の最終変位
+    - Displacement Vector
+    - Final displacement after applying the falloff
     """
-    # メモリモニタリングを開始
+    # Start memory monitoring
     memory_monitor = MemoryMonitor()
     total_vertices = len(target_world_vertices)
     
-    # 最適なワーカー数を計算
+    # Calculate the optimal number of workers
     if max_workers is None:
         max_workers = get_optimal_worker_count(total_vertices, memory_monitor)
     
-    print(f"マルチプロセスRBF補間を開始（ワーカー数: {max_workers}, 初期メモリ: {memory_monitor.initial_memory:.1f}GB, dtype: {DEFAULT_DTYPE.__name__}）")
+    print(f"Starting multi-process RBF interpolation (number of workers: {max_workers}, initial memory: {memory_monitor.initial_memory:.1f}GB, dtype: {DEFAULT_DTYPE.__name__}）")
 
-    # 入力をfloat32に変換（メモリ効率化）
+    # Convert input to float32 (for better memory efficiency)
     source_control_points = source_control_points.astype(DEFAULT_DTYPE)
     source_control_points_deformed = source_control_points_deformed.astype(DEFAULT_DTYPE)
     target_world_vertices = target_world_vertices.astype(DEFAULT_DTYPE)
 
-    # 変位ベクトルを計算（変形後の位置 - 元の位置）
+    # Calculate the displacement vector (post-deformation position - original position)
     displacements = source_control_points_deformed - source_control_points
     
-    # スケーリング係数を計算：距離の標準偏差に基づく値を使用
+    # Calculate the scaling factor: Use a value based on the standard deviation of the distance
     if epsilon <= 0:
-        # 平均距離に基づいて適切なepsilonを計算
+        # Calculate an appropriate epsilon based on the average distance
         dists = cdist_fast(source_control_points, source_control_points, 'euclidean')
         mean_dist = np.mean(dists[dists > 0])
-        epsilon = mean_dist  # 平均距離をepsilonとして使用
-        print(f"自動計算されたepsilon: {epsilon}")
+        epsilon = mean_dist  # Use the average distance as epsilon
+        print(f"Automatically calculated epsilon: {epsilon}")
 
-    # 制御点間の距離行列を計算（Numba利用可能時はJIT版を使用）
-    print(f"RBF行列を計算中...（Numba: {'有効' if NUMBA_AVAILABLE else '無効'}）")
+    # Calculate the distance matrix between control points (use the JIT version if Numba is available)
+    print(f"RBFCalculating the array... (Numba: {'Valid' if NUMBA_AVAILABLE else 'Invalid'})）")
     dist_matrix = cdist_fast(source_control_points, source_control_points, 'sqeuclidean')
 
-    # RBF行列を計算
+    # Calculate the RBF matrix
     phi = np.sqrt(dist_matrix + DEFAULT_DTYPE(epsilon**2))
 
     num_pts, dim = source_control_points.shape
     P = np.ones((num_pts, dim + 1), dtype=DEFAULT_DTYPE)
-    P[:, 1:] = source_control_points  # 多項式項のための拡張行列
+    P[:, 1:] = source_control_points  # Extended matrix for polynomial terms
 
-    # 完全な線形システムを構築
+    # Build a fully linear system
     A = np.zeros((num_pts + dim + 1, num_pts + dim + 1), dtype=DEFAULT_DTYPE)
     A[:num_pts, :num_pts] = phi
     A[:num_pts, num_pts:] = P
     A[num_pts:, :num_pts] = P.T
 
-    # 右辺を設定
+    # Set the right side
     b = np.zeros((num_pts + dim + 1, dim), dtype=DEFAULT_DTYPE)
     b[:num_pts] = displacements
     
-    # 解を求める
-    print(f"線形システムを解いています（行列サイズ: {A.shape[0]}x{A.shape[1]}, dtype: {A.dtype}）...")
+    # Find the solution
+    print(f"I am solving a linear system (matrix size: {A.shape[0]}x{A.shape[1]}, dtype: {A.dtype}）...")
     solve_start = time.time()
     x = None
 
-    # GMRES反復ソルバーを試行（実験的機能、USE_GMRES_SOLVER=Trueで有効化）
+    # Trying out the GMRES iterative solver (experimental feature; enable with USE_GMRES_SOLVER=True)
     if USE_GMRES_SOLVER:
-        print("GMRES反復ソルバーを試行中...（実験的機能）")
+        print("Testing the GMRES iterative solver... (Experimental feature)")
         gmres_start = time.time()
         x_gmres, gmres_success = solve_with_gmres(A, b)
         gmres_time = time.time() - gmres_start
 
         if gmres_success and x_gmres is not None:
             x = x_gmres.astype(DEFAULT_DTYPE)
-            print(f"GMRES収束成功（{gmres_time:.2f}秒）")
+            print(f"Testing the GMRES iterative solver... (Experimental feature)")
         else:
-            print(f"GMRES収束失敗（{gmres_time:.2f}秒）- 直接法にフォールバック")
+            print(f"GMRES convergence failed ({gmres_time:.2f} seconds) - Falling back to the direct method")
 
-    # 直接法（LU分解）
+    # Direct Method (LU Decomposition)
     if x is None:
         try:
-            # 通常の解法を試みる（DEFAULT_DTYPE精度）
+            # Attempt the standard solution (DEFAULT_DTYPE precision)
             x = np.linalg.solve(A, b)
         except np.linalg.LinAlgError:
-            # float32で失敗した場合、float64に昇格してリトライ
+            # If the operation fails with float32, promote to float64 and retry
             if A.dtype == np.float32:
-                print("float32で解法失敗 - float64に昇格してリトライします")
+                print("Solution failed with float32—I'll upgrade to float64 and try again.")
                 try:
                     A_f64 = A.astype(np.float64)
                     b_f64 = b.astype(np.float64)
                     x = np.linalg.solve(A_f64, b_f64).astype(DEFAULT_DTYPE)
                     del A_f64, b_f64
                 except np.linalg.LinAlgError:
-                    # float64でも失敗した場合、正則化して疑似逆行列を使用（float64で最大安定性）
-                    print("float64でも失敗 - 正則化を適用します（float64精度）")
+                    # If it fails even with float64, apply regularization and use the pseudo-inverse (maximum stability with float64)
+                    print("Fails even with float64 - Apply regularization (float64 precision)")
                     A_f64 = A.astype(np.float64)
                     b_f64 = b.astype(np.float64)
                     reg_f64 = np.eye(A.shape[0], dtype=np.float64) * 1e-6
                     x = np.linalg.lstsq(A_f64 + reg_f64, b_f64, rcond=None)[0].astype(DEFAULT_DTYPE)
                     del A_f64, b_f64, reg_f64
             else:
-                # 既にfloat64の場合、正則化して疑似逆行列を使用
-                print("行列が特異です - 正則化を適用します")
+                # If the matrix is already of type float64, regularize it and use the pseudo-inverse
+                print("The matrix is singular - applying regularization")
                 reg = np.eye(A.shape[0], dtype=np.float64) * 1e-6
                 x = np.linalg.lstsq(A + reg, b, rcond=None)[0]
 
     solve_time = time.time() - solve_start
-    print(f"線形システム求解完了（{solve_time:.2f}秒）")
+    print(f"Linear system solved ({solve_time:.2f} seconds)")
 
-    # 重みを抽出
+    # Extract weights
     rbf_weights = x[:num_pts]
     poly_weights = x[num_pts:]
     
-    # 不要な変数を削除してメモリを解放
+    # Remove unnecessary variables to free up memory
     del dist_matrix, phi, A, b, x
     
-    # メモリ使用量をチェックしてバッチサイズを調整
+    # Check memory usage and adjust the batch size
     memory_increase = memory_monitor.get_memory_increase()
-    if memory_increase > 1.0:  # 1GB以上増加した場合
+    if memory_increase > 1.0:  # If the increase is 1 GB or more
         batch_size = memory_monitor.get_recommended_batch_size(batch_size, memory_increase)
-        print(f"メモリ使用量に基づいてバッチサイズを調整: {batch_size}")
+        print(f"Adjust the batch size based on memory usage: {batch_size}")
     
-    # 結果を格納する配列を初期化
+    # Initialize the array to store the results
     target_displacements = np.zeros_like(target_world_vertices, dtype=DEFAULT_DTYPE)
     
-    # ハイブリッド並列化（P2-3）: ThreadPoolExecutor or ProcessPoolExecutor
+    # Hybrid Parallelization（P2-3）: ThreadPoolExecutor or ProcessPoolExecutor
     if USE_HYBRID_PARALLELIZATION:
-        # ThreadPoolExecutor用: タプル形式のバッチタスク
-        # メモリ共有が可能なため、データをコピーせず参照を渡す
+        # ThreadPoolExecutor Usage: Batch tasks in tuple format
+        # Since memory sharing is possible, pass by reference instead of copying data
         batch_tasks_thread = []
         for batch_start in range(0, total_vertices, batch_size):
             batch_end = min(batch_start + batch_size, total_vertices)
-            # タプル形式: (start_idx, end_idx, target_world_vertices, source_control_points,
+            # Tuple format: (start_idx, end_idx, target_world_vertices, source_control_points,
             #              rbf_weights, poly_weights, epsilon, dim)
             batch_tasks_thread.append((
                 batch_start, batch_end, target_world_vertices, source_control_points,
                 rbf_weights, poly_weights, epsilon, dim
             ))
 
-        # ThreadPoolExecutorはNumPy BLAS操作でGILを解放するため並列性が得られる
-        # Numba JIT関数もnogil=True指定によりGILを解放
-        # CPUコア数を上限としてオーバーサブスクライブを防止
+        # ThreadPoolExecutor enables parallelism by releasing the GIL during NumPy BLAS operations
+        # Numba JIT functions also release the GIL when 'nogil=True' is specified
+        # Prevents oversubscription by limiting the number of threads to the number of CPU cores
         cpu_count = os.cpu_count() or 4
-        thread_workers = min(cpu_count, max_workers * 2)  # スレッドはプロセスより軽量だが上限あり
-        print(f"ターゲットメッシュの頂点を {len(batch_tasks_thread)} バッチで"
-              f"ThreadPool処理します（全 {total_vertices} 頂点, ワーカー数: {thread_workers}）")
-        print("ハイブリッド並列化モード: ThreadPoolExecutor（NumPy GIL解放活用）")
+        thread_workers = min(cpu_count, max_workers * 2)  # Threads are lighter than processes, but there is a limit
+        print(f"Process the vertices of the target mesh in batches of {len(batch_tasks_thread)}"
+              f"Processing using a thread pool (all {total_vertices} vertices, number of workers: {thread_workers})")
+        print("Hybrid Parallelization Mode: ThreadPoolExecutor（Utilizing NumPy GIL Release）")
 
         processed_count = 0
         with ThreadPoolExecutor(max_workers=thread_workers) as executor:
@@ -813,26 +813,26 @@ def rbf_interpolation_multithread(source_control_points: np.ndarray,
                     if processed_count % (batch_size * 20) == 0 or processed_count == total_vertices:
                         if memory_monitor.enabled:
                             current_memory = memory_monitor.get_memory_usage()
-                            print(f"進捗: {processed_count}/{total_vertices} 頂点処理完了 "
-                                  f"({progress_percent:.1f}%) [メモリ: {current_memory:.1f}GB]")
+                            print(f"Progress: {processed_count}/{total_vertices} vertices processed."
+                                  f"({progress_percent:.1f}%) [Memory: {current_memory:.1f} GB]")
                         else:
-                            print(f"進捗: {processed_count}/{total_vertices} 頂点処理完了 ({progress_percent:.1f}%)")
+                            print(f"Progress: {processed_count}/{total_vertices} vertices processed ({progress_percent:.1f}%)")
 
                 except Exception as exc:
                     batch_start_idx = future_to_idx[future]
-                    print(f"バッチ開始位置 {batch_start_idx} でエラーが発生: {exc}")
-                    print("スタックトレース:")
+                    print(f"An error occurred at batch start position {batch_start_idx}: {exc}")
+                    print("Stack trace:")
                     traceback.print_exc()
                     raise exc
 
-        print("ThreadPool処理が完了しました")
+        print("ThreadPool processing is complete")
 
     else:
-        # ProcessPoolExecutor用: 辞書形式のバッチタスク（従来方式）
+        # For ProcessPoolExecutor: Batch tasks in dictionary format (traditional method)
         batch_tasks = []
         for batch_start in range(0, total_vertices, batch_size):
             batch_end = min(batch_start + batch_size, total_vertices)
-            batch_world_vertices = target_world_vertices[batch_start:batch_end].copy()  # コピーを作成
+            batch_world_vertices = target_world_vertices[batch_start:batch_end].copy()  # Create a copy
 
             batch_data = {
                 'start_idx': batch_start,
@@ -846,13 +846,13 @@ def rbf_interpolation_multithread(source_control_points: np.ndarray,
             }
             batch_tasks.append(batch_data)
 
-        print(f"ターゲットメッシュの頂点を {len(batch_tasks)} バッチでマルチプロセス処理します（全 {total_vertices} 頂点）")
+        print(f"Process the vertices of the target mesh in batches of {len(batch_tasks)} using multiprocessing (all {total_vertices} vertices)")
 
-        # ProcessPoolExecutor 開始直前に BLAS スレッド数を制限
-        # np.linalg.solve() は既に完了しているので、ここからは並列処理のオーバーサブスクライブ防止のため制限
-        # max_workers == 1 の場合は制限不要（低メモリモード等で単一ワーカーの場合はフルスレッド活用）
+        # Limit the number of BLAS threads immediately before starting the ProcessPoolExecutor
+        # Since 'np.linalg.solve() ' has already completed, this limit is applied to prevent oversubscription in parallel processing
+        # No limit is necessary when 'max_workers == 1' (in low-memory mode or similar scenarios where a single worker is used, all available threads are utilized)
         if max_workers == 1:
-            print("単一ワーカーモード: BLAS スレッド制限なし（フルスレッド活用）")
+            print("Single-worker mode: No BLAS thread limit (full thread utilization)")
         else:
             blas_threads = '2'
             os.environ['OMP_NUM_THREADS'] = blas_threads
@@ -860,12 +860,12 @@ def rbf_interpolation_multithread(source_control_points: np.ndarray,
             os.environ['MKL_NUM_THREADS'] = blas_threads
             os.environ['VECLIB_MAXIMUM_THREADS'] = blas_threads
             os.environ['NUMEXPR_NUM_THREADS'] = blas_threads
-            print(f"BLAS スレッド数を {blas_threads} に制限しました（ProcessPoolExecutor 開始前、ワーカー数: {max_workers}）")
+            print(f"The number of BLAS threads has been limited to {blas_threads} (before starting the ProcessPoolExecutor; number of workers: {max_workers})")
 
-        # マルチプロセス処理
+        # Multiprocessing
         processed_count = 0
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # バッチを並列処理
+            # Processing batches in parallel
             future_to_batch = {executor.submit(process_vertex_batch, batch_data): batch_data for batch_data in batch_tasks}
 
             for future in as_completed(future_to_batch):
@@ -876,25 +876,25 @@ def rbf_interpolation_multithread(source_control_points: np.ndarray,
                     processed_count += (end_idx - start_idx)
                     progress_percent = (processed_count / total_vertices) * 100
 
-                    # プロセスプールでの進捗表示（メモリ監視は各プロセスで独立）
+                    # Progress display in the process pool (memory monitoring is independent for each process)
                     if processed_count % (batch_size * 20) == 0 or processed_count == total_vertices:
                         if memory_monitor.enabled:
                             current_memory = memory_monitor.get_memory_usage()
-                            print(f"進捗: {processed_count}/{total_vertices} 頂点処理完了 ({progress_percent:.1f}%) [メインプロセスメモリ: {current_memory:.1f}GB]")
+                            print(f"Progress: {processed_count}/{total_vertices} vertices processed ({progress_percent:.1f}%) [Main process memory: {current_memory:.1f} GB]")
                         else:
-                            print(f"進捗: {processed_count}/{total_vertices} 頂点処理完了 ({progress_percent:.1f}%)")
+                            print(f"Progress: {processed_count}/{total_vertices} vertices processed ({progress_percent:.1f}%)")
 
                 except Exception as exc:
                     batch_data = future_to_batch[future]
-                    print(f"バッチ {batch_data['start_idx']}-{batch_data['end_idx']} でエラーが発生: {exc}")
-                    print("スタックトレース:")
+                    print(f"An error occurred in batch {batch_data['start_idx']}-{batch_data['end_idx']}: {exc}")
+                    print("Stack trace:")
                     traceback.print_exc()
                     raise exc
 
-        print("マルチプロセス処理が完了しました")
+        print("Multi-process processing has been completed")
 
-    # フォールオフ処理を適用
-    print("フォールオフ処理を適用中...")
+    # Apply falloff processing
+    print("Applying falloff...")
     final_displacements = falloff_displacements(
         target_world_vertices, 
         target_displacements, 
@@ -902,13 +902,13 @@ def rbf_interpolation_multithread(source_control_points: np.ndarray,
         max_workers
     )
 
-    # Note: BLAS スレッド数は固定値（2）のまま維持（処理後に戻す必要なし）
+    # Note: The number of BLAS threads remains fixed at 2 (no need to reset it after processing)
 
     if memory_monitor.enabled:
         final_memory = memory_monitor.get_memory_usage()
-        print(f"最終メモリ使用量: {final_memory:.1f}GB (増加: {memory_monitor.get_memory_increase():.1f}GB)")
+        print(f"Final memory usage: {final_memory:.1f} GB (Increase: {memory_monitor.get_memory_increase():.1f} GB)")
     else:
-        print("最終メモリ使用量: psutilが利用できないため表示できません")
+        print("Final memory usage: Cannot be displayed because psutil is not available.")
     
     return target_displacements, np.array(final_displacements)
 
@@ -916,35 +916,35 @@ def rbf_interpolation_multithread(source_control_points: np.ndarray,
 def process_temp_file(temp_file_path: str, max_workers: int = None,
                       old_version: bool = False, batch_size: int = None) -> str:
     """
-    一時ファイルを処理してマルチプロセスRBF補間を実行
+    Process temporary files to perform multi-process RBF interpolation
 
     Parameters:
-    - temp_file_path: 一時データファイルのパス
-    - max_workers: 最大ワーカー数
-    - old_version: 旧バージョン形式で保存するかどうか
-    - batch_size: バッチサイズ（Noneの場合は動的に最適化）
+    - temp_file_path: Path to the temporary data file
+    - max_workers: Maximum number of workers
+    - old_version: Whether to save in the old version format
+    - batch_size: Batch size (dynamically optimized if None)
     
     Returns:
-    - 出力ファイルのパス
+    - Path to the output file
     """
-    print(f"一時データファイルを読み込み中: {temp_file_path}")
+    print(f"Loading temporary data file: {temp_file_path}")
     
-    # 一時データを読み込み
+    # Load temporary data
     data = np.load(temp_file_path, allow_pickle=True)
     
-    # 新形式と旧形式の両方に対応
+    # Compatible with both the new and old formats
     if 'all_field_world_vertices' in data:
-        # 新形式：ステップごとのフィールド
+        # New Format: Fields by Step
         all_field_world_vertices = data['all_field_world_vertices']
-        print("新形式の一時データを検出（ステップごとのフィールド）")
+        print("Detected a new format for temporary data (fields for each step)")
     elif 'field_world_vertices' in data:
-        # 旧形式：単一フィールド
+        # Old format: Single field
         field_world_vertices = data['field_world_vertices']
         num_steps_temp = int(data['num_steps'])
         all_field_world_vertices = [field_world_vertices for _ in range(num_steps_temp)]
-        print("旧形式の一時データを検出（単一フィールドを複製）")
+        print("Detect temporary data in the old format (duplicate a single field)")
     else:
-        raise ValueError("フィールドデータが見つかりません")
+        raise ValueError("Field data not found ")
     
     field_world_matrix = data['field_world_matrix']
     all_step_data = data['all_step_data']
@@ -957,14 +957,14 @@ def process_temp_file(temp_file_path: str, max_workers: int = None,
     source_shape_key_name = str(data['source_shape_key_name'])
     save_shape_key_mode = bool(data['save_shape_key_mode'])
     
-    print(f"読み込み完了:")
-    print(f"  ステップ数: {num_steps}")
+    print(f"Loading complete:")
+    print(f"  Number of steps: {num_steps}")
     for step in range(num_steps):
-        print(f"  ステップ {step+1} フィールド頂点数: {len(all_field_world_vertices[step])}")
-    print(f"  逆変形: {invert}")
+        print(f"  Step {step+1} Number of field vertices: {len(all_field_world_vertices[step])}")
+    print(f"  Inverse transformation: {invert}")
     print(f"  Epsilon: {epsilon}")
 
-    # 最適なワーカー数を計算（最初のステップのデータを使用）
+    # Calculate the optimal number of workers (using data from the first step)
     first_step_data = all_step_data[0]
     num_control_pts = len(first_step_data['control_points_original'])
     total_vertices = len(all_field_world_vertices[0])
@@ -972,42 +972,42 @@ def process_temp_file(temp_file_path: str, max_workers: int = None,
     if max_workers is None:
         max_workers = get_optimal_worker_count(total_vertices, memory_monitor)
 
-    # バッチサイズの決定（ユーザー指定優先、未指定なら動的計算）
+    # Determining the batch size (user-specified value takes precedence; if not specified, calculated dynamically)
     if batch_size is not None:
         optimal_batch_size = batch_size
-        print(f"  バッチサイズ: {optimal_batch_size}（ユーザー指定）")
+        print(f"  Batch size: {optimal_batch_size} (User-specified)")
     else:
         optimal_batch_size = calculate_optimal_batch_size(num_control_pts, max_workers)
-        print(f"  バッチサイズ: {optimal_batch_size}（動的計算）")
+        print(f"  Batch size: {optimal_batch_size} (Dynamic Calculations)")
 
-    # 各ステップの変位を計算
+    # Calculate the displacement for each step
     all_displacements = []
     all_target_world_vertices = []
     
     for step in range(num_steps):
         step_data = all_step_data[step]
         
-        print(f"\n=== ステップ {step+1}/{num_steps} の処理 ===")
-        print(f"シェイプキー値: {step_data['step_value']}")
+        print(f"\n=== Processing step {step+1}/{num_steps} ===")
+        print(f"Shape Key Value: {step_data['step_value']}")
         
         source_control_points = step_data['control_points_original']
         source_control_points_deformed = step_data['control_points_deformed']
         
-        # 対応するステップのフィールドを取得
+        # Get the fields for the corresponding step
         current_field_vertices = all_field_world_vertices[step]
-        print(f"使用するフィールド頂点数: {len(current_field_vertices)}")
+        print(f"Number of field vertices used: {len(current_field_vertices)}")
 
-        print(f"current_field_vertices の型: {type(current_field_vertices)}")
-        print(f"current_field_vertices の形状: {current_field_vertices.shape}")
-        print(f"current_field_vertices のデータ型: {current_field_vertices.dtype}")
-        print(f"current_field_vertices の要素数: {len(current_field_vertices)}")
+        print(f"current_field_vertices type: {type(current_field_vertices)}")
+        print(f"current_field_vertices shape: {current_field_vertices.shape}")
+        print(f"current_field_vertices Data type: {current_field_vertices.dtype}")
+        print(f"current_field_vertices Number of elements: {len(current_field_vertices)}")
         
-        # 変位の最大値をチェック
+        # Check the maximum displacement
         displacements = source_control_points_deformed - source_control_points
         max_disp = np.max(np.linalg.norm(displacements, axis=1))
-        print(f"制御点の最大変位: {max_disp}")
+        print(f"Maximum displacement at the control point: {max_disp}")
 
-        # マルチプロセスRBF補間を実行（動的最適化されたバッチサイズを使用）
+        # Perform multi-process RBF interpolation (using dynamically optimized batch sizes)
         target_displacements, final_displacements = rbf_interpolation_multithread(
             source_control_points,
             source_control_points_deformed,
@@ -1020,9 +1020,9 @@ def process_temp_file(temp_file_path: str, max_workers: int = None,
         all_target_world_vertices.append(current_field_vertices.copy())
         all_displacements.append(final_displacements)
         
-        print(f"ステップ {step+1} の変位計算完了")
+        print(f"Displacement calculation for step {step+1} complete")
     
-    # 出力ファイルパスを生成
+    # Generate the output file path
     base_dir = os.path.dirname(temp_file_path)
     
     if save_shape_key_mode:
@@ -1032,7 +1032,7 @@ def process_temp_file(temp_file_path: str, max_workers: int = None,
         direction_suffix = "_inv" if invert else ""
         output_path = os.path.join(base_dir, f"deformation_{source_avatar_name}_to_{target_avatar_name}{direction_suffix}.npz")
     
-    # 結果を保存
+    # Save results
     save_field_data_multi_step(
         field_world_matrix,
         output_path,
@@ -1043,7 +1043,7 @@ def process_temp_file(temp_file_path: str, max_workers: int = None,
         enable_x_mirror=data.get('enable_x_mirror', False)
     )
     
-    print(f"結果を保存しました: {output_path}")
+    print(f"The results have been saved: {output_path}")
     return output_path
 
 
@@ -1054,17 +1054,17 @@ def save_field_data_multi_step(world_matrix, filepath,
                               old_version=False,
                               enable_x_mirror=True):
     """
-    複数ステップのDeformation Fieldの変形前後の差分をnumpy arrayとして直接保存
-    enable_x_mirrorが有効な場合、X座標が0以上のデータのみを保存
+    Save the difference between the before and after states of a multi-step deformation field directly as a NumPy array
+    If 'enable_x_mirror' is enabled, only data with X coordinates of 0 or greater is saved
     """
     
     kdtree_query_k = 27
     
-    # RBF補間のパラメータを追加
-    rbf_epsilon = 0.00001  # 固定値
-    rbf_smoothing = 0.0    # スムージングパラメータ
+    # Add RBF interpolation parameters
+    rbf_epsilon = 0.00001  # Fixed value
+    rbf_smoothing = 0.0    # Smoothing parameter
    
-    # データを保存
+    # Save data
     if old_version:
         np.savez(filepath,
                 field_points=all_field_points[0],
@@ -1075,7 +1075,7 @@ def save_field_data_multi_step(world_matrix, filepath,
                 rbf_epsilon=rbf_epsilon,
                 rbf_smoothing=rbf_smoothing)
     else:
-        # enable_x_mirrorが有効な場合、X座標が0以上のデータのみフィルタリング
+        # When 'enable_x_mirror' is enabled, only data with X-coordinates of 0 or greater is filtered
         if enable_x_mirror:
             filtered_field_points = []
             filtered_delta_positions = []
@@ -1085,7 +1085,7 @@ def save_field_data_multi_step(world_matrix, filepath,
                 delta_positions = all_delta_positions[step]
                 
                 if len(field_points) > 0:
-                    # X座標が0以上のインデックスを取得
+                    # Get the index where the X-coordinate is 0 or greater
                     x_positive_mask = field_points[:, 0] >= 0.0
                     filtered_field = field_points[x_positive_mask]
                     filtered_delta = delta_positions[x_positive_mask]
@@ -1093,13 +1093,13 @@ def save_field_data_multi_step(world_matrix, filepath,
                     filtered_field_points.append(filtered_field.astype(np.float32))
                     filtered_delta_positions.append(filtered_delta.astype(np.float32))
                     
-                    print(f"ステップ {step+1}: 元の頂点数 {len(field_points)} → フィルタ後 {len(filtered_field)}")
+                    print(f"Step {step+1}: Original number of vertices {len(field_points)} → After filtering {len(filtered_field)}")
                 else:
                     filtered_field_points.append(np.array([]))
                     filtered_delta_positions.append(np.array([]))
-                    print(f"ステップ {step+1}: フィールド頂点数 0")
+                    print(f"Step {step+1}: Number of field vertices: 0")
         else:
-            # ミラーが無効の場合、float32にキャストのみ行う
+            # If the mirror is disabled, only cast to float32
             filtered_field_points = []
             filtered_delta_positions = []
             
@@ -1110,11 +1110,11 @@ def save_field_data_multi_step(world_matrix, filepath,
                 if len(field_points) > 0:
                     filtered_field_points.append(field_points.astype(np.float32))
                     filtered_delta_positions.append(delta_positions.astype(np.float32))
-                    print(f"ステップ {step+1}: 頂点数 {len(field_points)} (ミラーフィルタなし)")
+                    print(f"Step {step+1}: Number of vertices {len(field_points)} (without mirror filter)")
                 else:
                     filtered_field_points.append(np.array([]))
                     filtered_delta_positions.append(np.array([]))
-                    print(f"ステップ {step+1}: フィールド頂点数 0")
+                    print(f"Step {step+1}: Number of field vertices: 0")
         
         np.savez(filepath,
                 all_field_points=np.array(filtered_field_points, dtype=object),
@@ -1126,37 +1126,37 @@ def save_field_data_multi_step(world_matrix, filepath,
                 rbf_smoothing=rbf_smoothing,
                 enable_x_mirror=enable_x_mirror)
         
-    print(f"Deformation Field差分データを保存しました: {filepath}")
-    print(f"ステップ数: {num_steps}")
+    print(f"Deformation Field difference data has been saved: {filepath}")
+    print(f"Number of steps: {num_steps}")
     if old_version:
-        print(f"ステップ 1: 頂点数 {len(all_field_points[0])}")
+        print(f"Step 1: Number of vertices {len(all_field_points[0])}")
     else:
         for step in range(num_steps):
             if step < len(filtered_field_points):
-                print(f"ステップ {step+1}: 頂点数 {len(filtered_field_points[step])}")
-    print(f"RBF関数: multi_quadratic_biharmonic, epsilon: {rbf_epsilon}, smoothing: {rbf_smoothing}")
+                print(f"Step {step+1}: Number of vertices {len(filtered_field_points[step])}")
+    print(f"RBF function: multi_quadratic_biharmonic, epsilon: {rbf_epsilon}, smoothing: {rbf_smoothing}")
 
 
 def process_multiple_temp_files(temp_file_pattern: str, max_workers: int = None,
                                 old_version: bool = False, batch_size: int = None) -> List[str]:
     """
-    複数の一時ファイルを処理（順方向と逆方向）
+    Processing Multiple Temporary Files (Forward and Reverse)
 
     Parameters:
-    - temp_file_pattern: 一時データファイルのパターン（_invサフィックスなし）
-    - max_workers: 最大ワーカー数
-    - old_version: 旧バージョン形式で保存するかどうか
-    - batch_size: バッチサイズ（Noneの場合は動的に最適化）
+    - temp_file_pattern: Pattern for temporary data files (without the _inv suffix)
+    - max_workers: Maximum number of workers
+    - old_version: Whether to save in the old version format
+    - batch_size: Batch size (dynamically optimized if None)
 
     Returns:
-    - 出力ファイルのパスのリスト
+    - A list of output file paths
     """
     output_paths = []
     
-    # 順方向ファイルと逆方向ファイルのパスを生成
+    # Generate paths for forward and reverse files
     temp_files = []
     
-    # 基本ファイル名から順方向と逆方向のファイルパスを生成
+    # Generate forward and reverse file paths from the base filename
     base_path = temp_file_pattern
     if base_path.endswith('.npz'):
         base_path = base_path[:-4]
@@ -1164,22 +1164,22 @@ def process_multiple_temp_files(temp_file_pattern: str, max_workers: int = None,
     forward_file = f"{base_path}.npz"
     inverse_file = f"{base_path}_inv.npz"
     
-    # 存在するファイルのみを処理対象に追加
+    # Include only existing files in the processing
     for temp_file in [forward_file, inverse_file]:
         if os.path.exists(temp_file):
             temp_files.append(temp_file)
         else:
-            print(f"警告: ファイルが見つかりません: {temp_file}")
+            print(f"Warning: File not found: {temp_file}")
     
     if not temp_files:
-        print("エラー: 処理対象のファイルが見つかりません")
+        print("Error: The file to be processed cannot be found.")
         return output_paths
     
     total_start_time = time.time()
     
     for i, temp_file in enumerate(temp_files):
         print(f"\n{'='*60}")
-        print(f"ファイル {i+1}/{len(temp_files)}: {os.path.basename(temp_file)}")
+        print(f"File {i+1}/{len(temp_files)}: {os.path.basename(temp_file)}")
         print(f"{'='*60}")
         
         start_time = time.time()
@@ -1191,12 +1191,12 @@ def process_multiple_temp_files(temp_file_pattern: str, max_workers: int = None,
             end_time = time.time()
             processing_time = end_time - start_time
             
-            print(f"ファイル {i+1} 処理完了: {processing_time:.2f}秒")
-            print(f"出力ファイル: {os.path.basename(output_path)}")
+            print(f"File {i+1} processed: {processing_time:.2f} seconds")
+            print(f"Output file: {os.path.basename(output_path)}")
             
         except Exception as e:
-            print(f"ファイル {i+1} でエラーが発生しました: {e}")
-            print("スタックトレース:")
+            print(f"File {i+1} An error has occurred: {e}")
+            print("Stack trace:")
             traceback.print_exc()
             continue
     
@@ -1204,12 +1204,12 @@ def process_multiple_temp_files(temp_file_pattern: str, max_workers: int = None,
     total_processing_time = total_end_time - total_start_time
     
     print(f"\n{'='*60}")
-    print(f"全体の処理完了")
+    print(f"Processing complete")
     print(f"{'='*60}")
-    print(f"処理されたファイル数: {len(output_paths)}/{len(temp_files)}")
-    print(f"総処理時間: {total_processing_time:.2f}秒")
+    print(f"Number of processed files: {len(output_paths)}/{len(temp_files)}")
+    print(f"Total processing time: {total_processing_time:.2f} seconds")
     if output_paths:
-        print("出力ファイル:")
+        print("Output file:")
         for path in output_paths:
             print(f"  - {os.path.basename(path)}")
     
@@ -1217,28 +1217,28 @@ def process_multiple_temp_files(temp_file_pattern: str, max_workers: int = None,
 
 
 def main():
-    parser = argparse.ArgumentParser(description='RBF変形の外部マルチプロセス処理（メモリ効率化対応）')
-    parser.add_argument('temp_file', help='一時データファイルのパス（基本ファイル名、自動的に_invファイルも処理）')
+    parser = argparse.ArgumentParser(description='External multi-process processing of RBF transformations (with memory optimization) ')
+    parser.add_argument('temp_file', help='Path to temporary data files (base filename; _inv files are also processed automatically) ')
     parser.add_argument('--max-workers', type=int, default=16, 
-                       help='最大プロセス数（デフォルト: CPUコア数・メモリ容量に基づく自動設定）')
+                       help='Maximum number of processes (Default: Automatically set based on the number of CPU cores and memory capacity) ')
     parser.add_argument('--batch-size', type=int, default=None,
-                       help='バッチサイズ（未指定時は動的に最適化。指定時はその値を優先）')
+                       help='Batch size (Optimized dynamically if not specified; if specified, that value takes precedence) ')
     parser.add_argument('--single-file', action='store_true',
-                       help='単一ファイルのみを処理（_invファイルを自動検出しない）')
+                       help='Process a single file only (do not automatically detect _inv files) ')
     parser.add_argument('--memory-limit', type=float, default=None,
-                       help='メモリ使用量の上限（GB単位、デフォルト: 制限なし）')
+                       help='Maximum memory usage (in GB; default: no limit) ')
     parser.add_argument('--low-memory', action='store_true',
-                       help='低メモリモード（バッチサイズとワーカー数を自動的に制限）')
+                       help='Low-memory mode (automatically limits batch size and number of workers) ')
     parser.add_argument('--old-version', action='store_true',
-                       help='旧バージョン形式で保存（互換性のため）')
+                       help='Save in the old file format (for compatibility) ')
     parser.add_argument('--use-threadpool', action='store_true',
-                       help='ハイブリッド並列化: RBF評価でThreadPoolExecutorを使用（実験的）')
+                       help='Hybrid Parallelization: Using ThreadPoolExecutor for RBF Evaluation (Experimental) ')
     parser.add_argument('--use-gmres', action='store_true',
-                       help='GMRES反復ソルバーを使用（実験的、収束しない場合は直接法にフォールバック）')
+                       help='Use the GMRES iterative solver (experimental; fall back to the direct method if convergence is not achieved) ')
 
     args = parser.parse_args()
 
-    # 実験的機能フラグの設定
+    # Setting Experimental Feature Flags
     global USE_HYBRID_PARALLELIZATION, USE_GMRES_SOLVER
     if args.use_threadpool:
         USE_HYBRID_PARALLELIZATION = True
@@ -1248,46 +1248,46 @@ def main():
     if PSUTIL_AVAILABLE:
         set_cpu_affinity()
 
-    # 低メモリモードの場合、設定を調整（プロセスプール用）
+    # In low-memory mode, adjust the settings (for the process pool)
     if args.low_memory:
-        print("低メモリモードが有効です。バッチサイズとプロセス数を制限します。")
+        print("Low-memory mode is enabled. This limits the batch size and the number of processes.")
         if args.batch_size is None or args.batch_size > 2000:
             args.batch_size = 2000
         if args.max_workers is None or args.max_workers > 1:
-            args.max_workers = 1  # プロセスプールでは1つに制限
+            args.max_workers = 1  # Limited to one per process pool
     
-    print(f"CPU数: {os.cpu_count()}")
-    print(f"Numba JIT: {'有効（距離計算高速化）' if NUMBA_AVAILABLE else '無効（pip install numba で有効化可能）'}")
-    print(f"GMRES反復ソルバー: {'有効（--use-gmres）' if USE_GMRES_SOLVER else '無効'}")
-    print(f"ハイブリッド並列化: {'有効（--use-threadpool）' if USE_HYBRID_PARALLELIZATION else '無効（ProcessPoolExecutor）'}")
-    # 注意: BLAS スレッド制限は ProcessPoolExecutor 開始直前に行う
-    # 線形システム求解（np.linalg.solve）は ProcessPoolExecutor 前に実行されるため、
-    # ここでは制限せず、multiprocess_rbf_interpolation() 内で制限する
-    # これにより線形システム求解のパフォーマンスを維持しつつ、
-    # ProcessPoolExecutor でのオーバーサブスクライブを防ぐ
+    print(f"Number of CPUs: {os.cpu_count()}")
+    print(f"Numba JIT: {'Enabled (accelerates distance calculation) ' if NUMBA_AVAILABLE else 'Disabled (can be enabled with pip install numba) '}")
+    print(f"GMRES iterative solver: {'Enabled (--use-gmres) ' if USE_GMRES_SOLVER else 'Disabled'}")
+    print(f"Hybrid parallelization: {'Enabled (--use-threadpool) ' if USE_HYBRID_PARALLELIZATION else 'Disabled (ProcessPoolExecutor) '}")
+    # Note: Set the BLAS thread limit immediately before starting the ProcessPoolExecutor.
+    # Since the linear system solver (np.linalg.solve) runs before the ProcessPoolExecutor,
+    # do not set the limit here; instead, set it within 'multiprocess_rbf_interpolation()'.
+    # This maintains the performance of the linear system solver while
+    # preventing oversubscription in the ProcessPoolExecutor
     if not USE_HYBRID_PARALLELIZATION:
-        print("BLAS スレッド数: 線形システム求解後に制限予定")
+        print("BLAS thread count: To be limited after solving the linear system")
     
     np.__config__.show()
     
-    # メモリ使用量の情報を表示（psutil利用可能時のみ）
+    # Display memory usage information (only when psutil is available)
     if PSUTIL_AVAILABLE:
         memory_info = psutil.virtual_memory()
-        print(f"システムメモリ情報:")
-        print(f"  総メモリ: {memory_info.total / 1024**3:.1f}GB")
-        print(f"  利用可能メモリ: {memory_info.available / 1024**3:.1f}GB")
-        print(f"  メモリ使用率: {memory_info.percent:.1f}%")
+        print(f"System Memory Information:")
+        print(f"  Total memory: {memory_info.total / 1024**3:.1f}GB")
+        print(f"  Available memory: {memory_info.available / 1024**3:.1f}GB")
+        print(f"  Memory usage: {memory_info.percent:.1f}%")
         if args.memory_limit:
-            print(f"  設定メモリ制限: {args.memory_limit:.1f}GB")
+            print(f"  Memory Limit Settings: {args.memory_limit:.1f}GB")
     else:
-        print("システムメモリ情報: psutilが利用できないため表示できません")
+        print("System memory information: Cannot be displayed because psutil is not available.")
         if args.memory_limit:
-            print(f"設定メモリ制限: {args.memory_limit:.1f}GB")
+            print(f"Memory Limit Settings: {args.memory_limit:.1f}GB")
     
     if args.single_file:
-        print(f"単一ファイル処理モード")
+        print(f"Single-file processing mode")
         if not os.path.exists(args.temp_file):
-            print(f"エラー: 一時データファイルが見つかりません: {args.temp_file}")
+            print(f"Error: Temporary data file not found: {args.temp_file}")
             sys.exit(1)
         
         start_time = time.time()
@@ -1299,29 +1299,29 @@ def main():
             end_time = time.time()
             processing_time = end_time - start_time
             
-            print(f"\n=== 処理完了 ===")
-            print(f"処理時間: {processing_time:.2f}秒")
-            print(f"出力ファイル: {output_path}")
+            print(f"\n=== Processing complete ===")
+            print(f"Processing time: {processing_time:.2f} seconds")
+            print(f"Output file: {output_path}")
             
         except Exception as e:
-            print(f"エラーが発生しました: {e}")
-            print("スタックトレース:")
+            print(f"An error has occurred: {e}")
+            print("Stack trace:")
             traceback.print_exc()
             sys.exit(1)
     else:
-        # 複数ファイル処理モード（デフォルト）
+        # Batch processing mode (default)
         try:
-            print(f"複数ファイル処理モード")
+            print(f"Batch Processing Mode")
             output_paths = process_multiple_temp_files(args.temp_file, args.max_workers,
                                                       args.old_version, args.batch_size)
             
             if not output_paths:
-                print("エラー: 処理されたファイルがありません")
+                print("Error: No files were processed")
                 sys.exit(1)
             
         except Exception as e:
-            print(f"エラーが発生しました: {e}")
-            print("スタックトレース:")
+            print(f"An error has occurred: {e}")
+            print("Stack trace:")
             traceback.print_exc()
             sys.exit(1)
 
