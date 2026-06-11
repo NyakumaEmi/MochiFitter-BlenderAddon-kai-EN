@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-MochiFitter-Kai - Advanced Avatar Outfit Retargeting System for Blender
+MochiFitter-Kai-EN - Advanced Avatar Outfit Retargeting System for Blender
 """
 
 bl_info = {
-    "name": "MochiFitter-Kai",
-    "author": "Community Fork (Original: MochiFitter Development Team)",
+    "name": "MochiFitter-Kai-EN",
+    "author": "Community Fork (Original: MochiFitter Development Team). DeepL Japanese to English Translation by NyakumaEmi.",
     "version": (0, 2, 20),
     "blender": (4, 0, 0),
-    "location": "View3D > Sidebar > MochiFitter-Kai",
-    "description": "Community-optimized fork of MochiFitter - Avatar Outfit Retargeting System using RBF interpolation",
-    "warning": "非公式版 - This is an unofficial community fork",
-    "wiki_url": "https://github.com/Mega-Gorilla/MochiFitter-BlenderAddon-kai",
+    "location": "View3D > Sidebar > MochiFitter-Kai-EN",
+    "description": "Community-optimized fork of MochiFitter - Avatar Outfit Retargeting System using RBF interpolation.",
+    "warning": "Unofficial version - This is an unofficial community fork. This add-on was machine translated using DeepL from Japanese to English. Please report any mistranslations to the github issues page linked below.",
+    "wiki_url": "https://github.com/NyakumaEmi/MochiFitter-BlenderAddon-kai-EN",
     "category": "Mesh",
     "support": "COMMUNITY"
 }
@@ -21,55 +21,55 @@ import sys
 import os
 import importlib
 
-# deps ディレクトリをパスに追加（scipy等の依存関係用）
-# 注意: scipy の import は遅延実行する（ファイルロック防止のため）
+# Add the 'deps' directory to the path (for dependencies such as scipy)
+# Note: Defer the import of scipy (to prevent file locking)
 libs_path = os.path.join(os.path.dirname(__file__), 'deps')
 if libs_path not in sys.path:
     sys.path.append(libs_path)
 
-# アドオンのディレクトリパスを取得
+# Get the add-on directory path
 addon_dir = os.path.dirname(__file__)
 
-# モジュールの動的インポート
+# Dynamic module import
 def reload_modules():
-    """アドオンのモジュールを再読み込みする"""
+    """Reload the add-on module"""
     import importlib
     
-    # すでにインポートされているモジュールがあれば再読み込み
+    # If any modules have already been imported, reload them
     if "SaveAndApplyFieldAuto" in locals():
         importlib.reload(SaveAndApplyFieldAuto)
     
-    # メインモジュールをインポート
+    # Import the main module
     from . import SaveAndApplyFieldAuto
 
 def register():
-    """アドオンを登録する"""
-    # メインモジュールを再読み込み
+    """Register an add-on"""
+    # Reload the main module
     reload_modules()
     
-    # メインモジュールの登録
+    # Registering the Main Module
     from . import SaveAndApplyFieldAuto
     
     try:
         SaveAndApplyFieldAuto.register()
-        print("MochiFitter-Kai アドオンが正常に登録されました")
+        print("MochiFitter-Kai-EN - The add-on has been successfully installed.")
     except Exception as e:
-        print(f"MochiFitter-Kai アドオンの登録中にエラーが発生しました: {e}")
+        print(f"MochiFitter-Kai-EN - An error occurred while registering the add-on: {e}")
         import traceback
         traceback.print_exc()
 
 def unregister():
-    """アドオンの登録を解除する"""
+    """Uninstall the add-on"""
     from . import SaveAndApplyFieldAuto
     
     try:
         SaveAndApplyFieldAuto.unregister()
-        print("MochiFitter-Kai アドオンの登録が解除されました")
+        print("MochiFitter-Kai-EN - The add-on has been uninstalled")
     except Exception as e:
-        print(f"MochiFitter-Kai アドオンの登録解除中にエラーが発生しました: {e}")
+        print(f"MochiFitter-Kai-EN - An error occurred while unregistering the add-on: {e}")
         import traceback
         traceback.print_exc()
 
-# スクリプトとして直接実行された場合の処理
+# Processing when executed directly as a script
 if __name__ == "__main__":
     register() 
