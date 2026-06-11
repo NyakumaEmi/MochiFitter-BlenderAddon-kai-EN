@@ -10,8 +10,9 @@ bl_info = {
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > MochiFitter-Kai-EN",
     "description": "Community-optimized fork of MochiFitter - Avatar Outfit Retargeting System using RBF interpolation.",
-    "warning": "Unofficial version - This is an unofficial community fork. This add-on was machine translated using DeepL from Japanese to English. Please report any mistranslations to the github issues page linked below.",
-    "wiki_url": "https://github.com/NyakumaEmi/MochiFitter-BlenderAddon-kai-EN",
+    "warning": "Unofficial version - This is an unofficial community fork. This add-on was machine translated using DeepL from Japanese to English. Mistranslations can be reported to the github issues page by clicking the 'Report a Bug' button.",
+    "doc_url": "https://github.com/NyakumaEmi/MochiFitter-BlenderAddon-kai-EN",
+    "tracker_url": "https://github.com/NyakumaEmi/MochiFitter-BlenderAddon-kai-EN/issues",
     "category": "Mesh",
     "support": "COMMUNITY"
 }
