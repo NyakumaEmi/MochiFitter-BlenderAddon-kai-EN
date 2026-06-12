@@ -4,7 +4,9 @@ MochiFitter Blender Add-on Optimization and Refactoring Project.
 
 This is an English Translation of the original Japanese [Mega-Gorilla/MochiFitter-BlenderAddon-kai](https://github.com/Mega-Gorilla/MochiFitter-BlenderAddon-kai) repository.
 
-⚠️ **Blender Version Warning: MochiFitter Profiles generated with Blender 5.X and later are likely to encounter bugs due to breaking Python version differences and API changes between Blender 4.X and Blender 5.X.**
+---
+## ⚠️ Important - Blender Version Warning
+⚠️ **MochiFitter Profiles generated with Blender 5.X or later are likely to encounter bugs due to breaking Python version differences and API changes between Blender 4.X and Blender 5.X.**
 - Use Blender 4.0.0 up to [the latest 4.5.X LTS](https://www.blender.org/download/releases/4-5/) for the most stable experience.
 - Blender 4.0.2 is the official version recommended by MochiFitter.
 - See 'Supported Blender Versions' below for more detailed Blender version links.
@@ -36,8 +38,9 @@ The MochiFitter-BlenderAddon-kai-EN is a free add-on. It is compatible with Blen
 
 ## Not Included
 
-- [MochiFitter Unity add-on (2,500 JPY)](https://yamirin.booth.pm/items/7657840) - Not publicly available as it is paid content.
-- The paid MochiFitter add-on provides the Blender file templates you will need for creating MochiFitter profiles.
+The paid MochiFitter add-on by NINE GATES (2,500 JPY) linked below provides the Blender file templates you will need for creating MochiFitter profiles.
+
+- [MochiFitter Unity add-on (2,500 JPY)](https://yamirin.booth.pm/items/7657840) - Not publicly available to download as it is paid content.
 
 ## System Requirements
 
@@ -117,8 +120,8 @@ This project is released under the GNU General Public License v3.0. For details,
 
 If this English translation of [the original 'MochiFitter-Kai'](https://github.com/Mega-Gorilla/MochiFitter-BlenderAddon-kai) has been useful to you, consider supporting the original creator, Mega-Gorilla on Booth. The link below is 500 JPY. Before checkout, you can click 'Add a tip to support this creator' if you would like to leave a bigger tip to Mega-Gorilla.
 - [MochiFitter-Kai (BOOTH), 500 JPY](https://megagorilla.booth.pm/items/7807826) - Original Japanese Package Distribution Page
-
-The paid MochiFitter add-on provides the Blender file templates you will need for creating MochiFitter profiles.
+---
+The paid MochiFitter add-on by NINE GATES (2,500 JPY) linked below provides the Blender file templates you will need for creating MochiFitter profiles.
 - [MochiFitter (BOOTH), 2,500 JPY](https://yamirin.booth.pm/items/7657840) - Original Product Page.
 
 ## Important Notes
