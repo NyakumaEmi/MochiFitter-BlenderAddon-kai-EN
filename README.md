@@ -1,101 +1,128 @@
-# MochiFitter-BlenderAddon-kai
+# MochiFitter-BlenderAddon-kai-EN
 
-MochiFitter Blenderアドオンの最適化・リファクタリングプロジェクト
+MochiFitter Blender Add-on Optimization and Refactoring Project.
 
-## 概要
+This is an English Translation of the original Japanese [Mega-Gorilla/MochiFitter-BlenderAddon-kai](https://github.com/Mega-Gorilla/MochiFitter-BlenderAddon-kai) repository.
 
-このリポジトリは、[MochiFitter](https://booth.pm/ja/items/7657840)のBlenderアドオン部分について、コードの最適化とリファクタリングを行うプロジェクトです。
+⚠️ **Blender Version Warning: MochiFitter Profiles generated with Blender 5.X and later are likely to encounter bugs due to breaking Python version differences and API changes between Blender 4.X and Blender 5.X.**
+- Use Blender 4.0.0 up to [the latest 4.5.X LTS](https://www.blender.org/download/releases/4-5/) for the most stable experience.
+- Blender 4.0.2 is the official version recommended by MochiFitter.
+- See 'Supported Blender Versions' below for more detailed Blender version links.
 
-MochiFitterは、VRChat/VRMアバター向けの衣装リターゲティングシステムです。RBF（Radial Basis Function）補間と変形フィールドを使用して、異なるアバター間でメッシュ変形を転送します。
+## Overview
 
-## インストール
+This repository is a project dedicated to optimizing and refactoring the code for the open-source (GPLv3 license) Blender add-on portion of [MochiFitter](https://yamirin.booth.pm/items/7657840).
 
-パッケージ版は以下で配布しています：
+MochiFitter is a paid costume retargeting system for VRChat/VRM avatars. It uses RBF (Radial Basis Function) interpolation and deformation fields to transfer mesh deformations between different avatars.
 
-**[MochiFitter-Kai（BOOTH）](https://megagorilla.booth.pm/items/7807826)**
+## Installation
 
-## このリポジトリの目的
+The packaged .zip version of the MochiFitter-BlenderAddon-kai-EN is available for download here:
 
-- コードの可読性向上
-- パフォーマンス最適化
-- バグ修正
-- 機能改善の検討・実装
+**[MochiFitter-BlenderAddon-kai-EN Releases (Github)](https://github.com/NyakumaEmi/MochiFitter-BlenderAddon-kai-EN/releases)**
 
-## 含まれるもの
+The MochiFitter-BlenderAddon-kai-EN is a free add-on. It is compatible with Blender 4.0.0 up to the latest 4.5.X LTS.
 
-- `MochiFitter-BlenderAddon/` - Blenderアドオン本体（GPLv3ライセンス）
+## Purpose of This Repository
 
-## 含まれないもの
+- Improve code readability
+- Optimize performance
+- Fix bugs
+- Explore and implement feature improvements
 
-- Unity アドオン（有料コンテンツのため非公開）
+## What Is Included
 
-## 動作要件
+- `MochiFitter-BlenderAddon/` - The Blender add-on itself (GPLv3 license)
 
-- Blender 4.0以上
+## Not Included
+
+- [MochiFitter Unity add-on (2,500 JPY)](https://yamirin.booth.pm/items/7657840) - Not publicly available as it is paid content.
+- The paid MochiFitter add-on provides the Blender file templates you will need for creating MochiFitter profiles.
+
+## System Requirements
+
+- Blender 4.0.0 up to the latest 4.5.X (**Blender 5.X or later is NOT recommended.**)
 - NumPy
-- SciPy（アドオン内の再インストールボタンで導入可能）
+- SciPy (can be installed using the "Reinstall" button within the add-on)
+- Numba (can be installed using the "Reinstall" button within the add-on)
 
-## 対応プラットフォーム
+## Supported Blender Versions
 
-| プラットフォーム | サポート状況 | 備考 |
-|-----------------|-------------|------|
-| Windows | ✅ 完全対応 | Microsoft Store版Blenderにも対応 |
-| Linux | ✅ 対応 | psutilは手動インストール推奨 |
-| macOS | ⚠️ 未検証 | 動作する可能性あり |
+| Supported Blender Versions                                                      |
+|---------------------------------------------------------------------------------|
+| [Blender 4.0.0 - 4.0.2](https://download.blender.org/release/Blender4.0/)       |
+| [Blender 4.1.0 - 4.1.1](https://download.blender.org/release/Blender4.1/)       |
+| [Blender 4.2.0 - 4.2.21+ LTS](https://download.blender.org/release/Blender4.2/) |
+| [Blender 4.3.0 - 4.3.2](https://download.blender.org/release/Blender4.3/)       |
+| [Blender 4.4.0 - 4.4.3](https://download.blender.org/release/Blender4.4/)       |
+| [Blender 4.5.0 - 4.5.10+ LTS](https://download.blender.org/release/Blender4.5/) |
 
-### Linux ユーザー向け注意事項
+## Supported Platforms
 
-Linux環境では、メモリ監視機能に使用する`psutil`モジュールがバンドル版では動作しません。
-メモリ監視機能を有効にするには、Blender内蔵のPythonでpsutilをインストールしてください：
+| Platform | Support Status    | Notes                                          |
+|----------|-------------------|------------------------------------------------|
+| Windows  | ✅ Fully supported | Also supports Blender from the Microsoft Store|
+| Linux    | ✅ Supported       | Manual installation of psutil recommended     |
+| macOS    | ⚠️ Untested       | May work                                       |
+
+### Notes for Linux Users
+
+In a Linux environment, the `psutil` module used for the memory monitoring feature does not work with the bundled version.
+To enable the memory monitoring feature, please install psutil using Blender's built-in Python:
 
 ```bash
-# Blender内蔵Pythonのパスを確認（例）
+# Check the path to Blender's built-in Python (example)
 /path/to/blender/4.x/python/bin/python3 -m pip install psutil
 ```
 
-psutilがなくても基本機能は動作しますが、メモリ監視とCPU親和性設定が無効になります。
+Basic functionality will work even without psutil, but memory monitoring and CPU affinity settings will be disabled.
 
-## 開発環境セットアップ
+## Development Environment Setup
 
-ローカル開発・E2Eテストを行うには、以下の手順でBlender環境をセットアップしてください。
+To perform local development and E2E testing, please set up your Blender environment using the following steps.
 
-### 1. Blenderのインストール
+### 1. Installing Blender
 
 ```bash
 python scripts/setup_blender.py
 ```
 
-これにより以下がセットアップされます：
-- Blender 4.0.2（もちふぃった～公式推奨バージョン）
-- scipy, numpy（Blender内蔵Pythonにインストール）
+This will install the following:
+- Blender 4.0.2 (the official version recommended by MochiFitter)
+- scipy, numpy (installed in Blender's built-in Python)
 
-### 2. robust-weight-transfer アドオンのコピー（必須）
+### 2. Copying the robust-weight-transfer Add-on (Required)
 
-E2Eテスト（`run_retarget.py`）を実行するには、もちふぃった～ Unityパッケージに同梱されている`robust-weight-transfer`アドオンを手動でコピーする必要があります。
+To run the E2E tests (`run_retarget.py`), you must manually copy the `robust-weight-transfer` add-on included in the MochiFitter Unity package.
 
 ```
-コピー元: <MochiFitter Unity Project>/BlenderTools/blender-4.0.2-windows-x64/4.0/scripts/addons/robust-weight-transfer/
-コピー先: MochFitter-unity-addon/BlenderTools/blender-4.0.2-windows-x64/4.0/scripts/addons/robust-weight-transfer/
+Source: <MochiFitter Unity Project>/BlenderTools/blender-4.0.2-windows-x64/4.0/scripts/addons/robust-weight-transfer/
+Destination: MochFitter-unity-addon/BlenderTools/blender-4.0.2-windows-x64/4.0/scripts/addons/robust-weight-transfer/
 ```
 
-> **Note**: このアドオンはGitHubリポジトリには含まれていません。もちふぃった～を購入後、Unityプロジェクトからコピーしてください。
+> **Note**: This add-on is not included in the GitHub repository. Please copy it from the Unity project after [purchasing MochiFitter (2,500 JPY)](https://yamirin.booth.pm/items/7657840).
 
-### 3. E2Eテストの実行
+### 3. Running E2E Tests
 
 ```bash
 cd MochFitter-unity-addon/OutfitRetargetingSystem
 python run_retarget.py --preset beryl_to_mao
 ```
 
-## ライセンス
+## License
 
-このプロジェクトはGNU General Public License v3.0の下で公開されています。詳細は[LICENSE.txt](MochiFitter-BlenderAddon/LICENSE.txt)を参照してください。
+This project is released under the GNU General Public License v3.0. For details, please refer to [LICENSE.txt](MochiFitter-BlenderAddon/LICENSE.txt).
 
-## 関連リンク
+## Related Links
 
-- [MochiFitter-Kai（BOOTH）](https://megagorilla.booth.pm/items/7807826) - パッケージ版配布ページ
-- [MochiFitter（BOOTH）](https://booth.pm/ja/items/7657840) - オリジナル製品ページ
+If this English translation of [the original 'MochiFitter-Kai'](https://github.com/Mega-Gorilla/MochiFitter-BlenderAddon-kai) has been useful to you, consider supporting the original creator, Mega-Gorilla on Booth. The link below is 500 JPY. Before checkout, you can click 'Add a tip to support this creator' if you would like to leave a bigger tip to Mega-Gorilla.
+- [MochiFitter-Kai (BOOTH), 500 JPY](https://megagorilla.booth.pm/items/7807826) - Original Japanese Package Distribution Page
 
-## 注意事項
+The paid MochiFitter add-on provides the Blender file templates you will need for creating MochiFitter profiles.
+- [MochiFitter (BOOTH), 2,500 JPY](https://yamirin.booth.pm/items/7657840) - Original Product Page.
 
-このリポジトリは非公式のコミュニティプロジェクトです。オリジナルのMochiFitterに関するサポートや問い合わせは、BOOTHの製品ページをご確認ください。
+## Important Notes
+
+This repository is an unofficial community project. For support or inquiries regarding the original MochiFitter, please [visit the product page](https://yamirin.booth.pm/items/7657840) on BOOTH. There is an official NINE GATES Discord server linked there. 
+
+⚠️ **!! Support is provided only in Japanese in the official NINE GATES / MochiFitter Discord server.**
