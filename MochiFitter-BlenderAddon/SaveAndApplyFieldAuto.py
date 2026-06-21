@@ -5560,7 +5560,7 @@ def reinstall_numpy_scipy_multithreaded(python_path, numpy_version, scipy_versio
                 # Keep the new 'deps_new' file even if it fails (for manual recovery)
                 return False, result.stdout, err_msg
 
-        Rename #deps_new to deps
+        # Rename deps_new to deps
         print(f"Moving deps_new to deps...")
         success, err_type, err_msg = safe_rename(deps_new_path, deps_path)
         if not success:
