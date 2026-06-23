@@ -5,12 +5,17 @@ MochiFitter-Kai-EN - Advanced Avatar Outfit Retargeting System for Blender
 
 bl_info = {
     "name": "MochiFitter-Kai-EN",
-    "author": "Community Fork (Original: MochiFitter Development Team). DeepL Japanese to English Translation by NyakumaEmi.",
-    "version": (0, 2, 20),
+    "author": "Community Fork (Original: MochiFitter Development Team)."
+    "DeepL Japanese to English Translation by NyakumaEmi.",
+    "version": (0, 2, 20, 1),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > MochiFitter-Kai-EN",
-    "description": "Community-optimized fork of MochiFitter - Avatar Outfit Retargeting System using RBF interpolation. Compatible with Blender 4.0.0 up to the latest 4.5.X LTS. Creating MochiFitter profiles with Blender 5.X or later with this add-on is NOT recommended, as 5.X+ introduces breaking Python and API changes.",
-    "warning": "Unofficial version - This is an unofficial community fork. Machine translated using DeepL from Japanese to English. Mistranslations can be reported to the github issues page.",
+    "description": "Community-optimized fork of MochiFitter - Avatar Outfit Retargeting System using RBF interpolation."
+    "Compatible with Blender 4.0.0 up to the latest 4.5.X LTS." 
+    "Creating MochiFitter profiles with Blender 5.X or later with this add-on is NOT recommended, as 5.X+ introduces breaking Python and API changes.",
+    "warning": "Unofficial version - This is an unofficial community fork."
+    "Machine translated using DeepL from Japanese to English." 
+    "Mistranslations can be reported to the github issues page.",
     "doc_url": "https://github.com/NyakumaEmi/MochiFitter-BlenderAddon-kai-EN",
     "tracker_url": "https://github.com/NyakumaEmi/MochiFitter-BlenderAddon-kai-EN/issues",
     "category": "Mesh",
